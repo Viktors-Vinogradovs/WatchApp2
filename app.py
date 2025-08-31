@@ -9,7 +9,7 @@ from llm_qgen import generate_questions
 
 # Configure page
 st.set_page_config(
-    page_title="Watch & Ask",
+    page_title="Watch & Ask - YouTube + Gemini",
     page_icon="🎥",
     layout="wide"
 )
@@ -111,18 +111,18 @@ def get_current_question(state):
     # Simple swap for variation
     if i % 2 == 1 and len(ordered) >= 2:
         ordered[0], ordered[1] = ordered[1], ordered[0]
-    return f"{item['q']}", ordered
+    return f"Q{i + 1}: {item['q']}\n(From ~{item['start']}s)", ordered
 
 
 def submit_answer(state, choice):
     i = state["idx"]
     if i >= len(state["qa"]):
-        return state, "Pabeigts!", ""
+        return state, "Finished.", ""
     item = state["qa"][i]
     is_correct = (choice == item["a"])
     state["score"] += int(is_correct)
     state["idx"] += 1
-    fb = "✅ Pareizi!" if is_correct else f"❌ Nav gluži tā.\n**Pareizi:** {item['a']}"
+    fb = "✅ Correct!" if is_correct else f"❌ Not quite.\n**Correct:** {item['a']}"
     return state, fb
 
 
@@ -138,29 +138,31 @@ def init_session_state():
         st.session_state.feedback_message = ""
 
 
-def format_time(seconds):
-    """Convert seconds to MM:SS format"""
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{mins}:{secs:02d}"
-
-
 # -------- Streamlit UI --------
 def main():
     init_session_state()
 
-    st.header("🎥 Skaties video un atbildi uz jautājumiem!")
+    st.title("🎥 Watch & Ask — YouTube Captions → LLM Questions")
 
-    # Compact URL input
-    col1, col2 = st.columns([5, 1])
+    # URL Input Section
+    st.subheader("📝 Enter YouTube URL")
+    col1, col2 = st.columns([3, 1])
+
     with col1:
-        url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=xxxxxxxx")
-    with col2:
-        st.write("")  # Spacing
-        generate_btn = st.button("Veidot jautājumus", type="primary", use_container_width=True)
+        url = st.text_input(
+            "YouTube URL",
+            placeholder="https://www.youtube.com/watch?v=XXXXXXXXXXX",
+            key="youtube_url"
+        )
 
+    with col2:
+        st.write("")  # Add spacing
+        st.write("")  # Add spacing
+        generate_btn = st.button("🎯 Generate Questions", type="primary")
+
+    # Generate questions when button is clicked
     if generate_btn and url:
-        with st.spinner("Meklēju subtitrus un veidoju jautājumus..."):
+        with st.spinner("🔄 Fetching captions and generating questions..."):
             quiz_state, message = build_qa(url)
             st.session_state.quiz_state = quiz_state
             st.session_state.show_feedback = False
@@ -171,6 +173,7 @@ def main():
         else:
             st.error(message)
 
+    # Display quiz if questions are loaded
     if st.session_state.quiz_state:
         display_quiz()
 
@@ -178,121 +181,111 @@ def main():
 def display_quiz():
     quiz_state = st.session_state.quiz_state
 
-    # Progress and stats in compact row
-    col1, col2, col3, col4 = st.columns([3, 1, 1, 1.5])
+    # Progress bar
+    progress = quiz_state["idx"] / len(quiz_state["qa"])
+    st.progress(progress)
+
+    # Score display
+    col1, col2, col3 = st.columns(3)
     with col1:
-        progress = quiz_state["idx"] / len(quiz_state["qa"]) if len(quiz_state["qa"]) > 0 else 0
-        st.progress(progress)
+        st.metric("📊 Score", f"{quiz_state['score']}/{quiz_state['idx']}")
     with col2:
-        st.metric("Punkti", f"{quiz_state['score']}/{quiz_state['idx']}")
+        st.metric("🎯 Question", f"{quiz_state['idx'] + 1}/{len(quiz_state['qa'])}")
     with col3:
-        st.metric("Progress", f"{quiz_state['idx']}/{len(quiz_state['qa'])}")
-    with col4:
-        if st.button("Sāc jaunu testu", use_container_width=True):
-            st.session_state.quiz_state = None
-            st.session_state.show_feedback = False
-            st.session_state.current_answer = None
-            st.rerun()
+        st.metric("🌐 Language", quiz_state['lang_name'])
 
     st.divider()
+
+    # YouTube Video Player
+    if quiz_state.get("video_id"):
+        st.subheader("📺 Video Player")
+        youtube_url = f"https://www.youtube.com/watch?v={quiz_state['video_id']}"
+
+        # Create two columns - video player and current question info
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            # Embed YouTube video
+            video_embed_url = f"https://www.youtube.com/embed/{quiz_state['video_id']}"
+            st.components.v1.iframe(video_embed_url, width=560, height=315)
+
+        with col2:
+            # Show current question timestamp
+            if quiz_state["idx"] < len(quiz_state["qa"]):
+                current_time = quiz_state["qa"][quiz_state["idx"]]["start"]
+                st.info(f"⏰ Current question is from ~{current_time}s in the video")
+
+                # Direct link to timestamp
+                timestamped_url = f"{youtube_url}&t={int(current_time)}s"
+                st.markdown(f"[▶️ Jump to timestamp]({timestamped_url})")
+
+            st.markdown(f"[🔗 Open in YouTube]({youtube_url})")
+
+        st.divider()
 
     # Check if quiz is finished
     if quiz_state["idx"] >= len(quiz_state["qa"]):
         st.balloons()
+        st.success(f"🎉 Quiz Complete! Final Score: {quiz_state['score']}/{len(quiz_state['qa'])}")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.success("🎉 Tests pabeigts!")
-            final_score = quiz_state['score']
-            total_questions = len(quiz_state['qa'])
-            percentage = (final_score / total_questions) * 100
+        # Calculate percentage
+        percentage = (quiz_state['score'] / len(quiz_state['qa'])) * 100
+        if percentage >= 80:
+            st.success("🏆 Excellent work!")
+        elif percentage >= 60:
+            st.info("👍 Good job!")
+        else:
+            st.warning("📚 Keep practicing!")
 
-            if percentage >= 80:
-                st.success("🏆 Lielisks darbiņš!")
-            elif percentage >= 60:
-                st.info("👍 Labi!")
-            else:
-                st.warning("📚 Turpini trenēties!")
-
-        with col2:
-            st.metric("Tavi punkti ", f"{final_score}/{total_questions}", f"{percentage:.0f}%")
-
+        # Reset button
+        if st.button("🔄 Start New Quiz"):
+            st.session_state.quiz_state = None
+            st.session_state.show_feedback = False
+            st.session_state.current_answer = None
+            st.rerun()
         return
 
-    # Main layout: Video and Questions side by side
-    if quiz_state.get("video_id"):
-        current_qa = quiz_state["qa"][quiz_state["idx"]]
-        current_time = current_qa["start"]
+    # Display current question
+    question_data = get_current_question(quiz_state)
+    if question_data:
+        question_text, choices = question_data
 
-        # Two columns: Video (left) and Questions (right)
-        video_col, question_col = st.columns([1.3, 1], gap="large")
+        st.subheader("❓ Current Question")
+        st.write(question_text)
 
-        with video_col:
-            st.subheader("📺 Video")
+        # Display choices as radio buttons
+        current_answer = st.radio(
+            "Choose your answer:",
+            options=choices,
+            key=f"answer_{quiz_state['idx']}",
+            index=None
+        )
 
-            # Timestamp navigation
-            youtube_url = f"https://www.youtube.com/watch?v={quiz_state['video_id']}"
-            timestamped_url = f"{youtube_url}&t={int(current_time)}s"
+        # Submit button
+        col1, col2, col3 = st.columns([1, 1, 2])
+        with col1:
+            submit_btn = st.button("✅ Submit Answer", disabled=(current_answer is None))
 
-            col_time, col_btn = st.columns([2, 1])
-            with col_time:
-                st.info(f"⏰ Jautājums no: **{format_time(current_time)}**")
-            with col_btn:
-                st.link_button("▶️ Atrod īsto brīdi", timestamped_url, use_container_width=True)
+        # Handle answer submission
+        if submit_btn and current_answer:
+            # Process the answer
+            old_state = dict(quiz_state)  # Make a copy
+            quiz_state, feedback = submit_answer(quiz_state, current_answer)
 
-            # Embedded video
-            video_embed_url = f"https://www.youtube.com/embed/{quiz_state['video_id']}?start={int(current_time)}"
-            st.components.v1.iframe(video_embed_url, height=300)
+            # Update session state
+            st.session_state.quiz_state = quiz_state
+            st.session_state.feedback_message = feedback
+            st.session_state.show_feedback = True
 
-            # Additional links
-            st.link_button("🔗 Open in YouTube", youtube_url, use_container_width=True)
+            # Show feedback
+            if "Correct!" in feedback:
+                st.success(feedback)
+            else:
+                st.error(feedback)
 
-        with question_col:
-            st.subheader("❓ Jautājums")
-
-            question_data = get_current_question(quiz_state)
-            if question_data:
-                question_text, choices = question_data
-
-                # Question number and text
-                st.write(f"**Jautājums {quiz_state['idx'] + 1}:**")
-                st.info(question_text)
-
-                # Answer choices
-                current_answer = st.radio(
-                    "Izvēlies pareizo atbildi:",
-                    options=choices,
-                    key=f"answer_{quiz_state['idx']}",
-                    index=None
-                )
-
-                # Submit button
-                submit_btn = st.button(
-                    "✅ Iesniedz atbildi",
-                    disabled=(current_answer is None),
-                    use_container_width=True,
-                    type="primary"
-                )
-
-                # Language info
-                st.caption(f"Language: {quiz_state['lang_name']}")
-
-                # Handle answer submission
-                if submit_btn and current_answer:
-                    old_state = dict(quiz_state)
-                    quiz_state, feedback = submit_answer(quiz_state, current_answer)
-
-                    st.session_state.quiz_state = quiz_state
-                    st.session_state.feedback_message = feedback
-                    st.session_state.show_feedback = True
-
-                    if "Pareizi!" in feedback:
-                        st.success(feedback)
-                    else:
-                        st.error(feedback)
-
-                    time.sleep(1.5)
-                    st.rerun()
+            # Add a small delay and rerun to show next question
+            time.sleep(1)
+            st.rerun()
 
 
 if __name__ == "__main__":
