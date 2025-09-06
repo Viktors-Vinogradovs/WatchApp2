@@ -3,6 +3,7 @@ import re, time
 import streamlit as st
 from typing import Tuple, List, Dict, Any
 
+
 # Import from our existing modules
 from captions import extract_video_id, fetch_captions
 from llm_qgen import generate_questions
@@ -98,7 +99,7 @@ def build_qa(url: str):
         return None, "❌ Couldn't generate any questions from this transcript."
 
     state = {"video_id": vid, "lang_name": lang_name, "qa": qa, "idx": 0, "score": 0, "previous_qs": previous_questions}
-    return state, f"✅ Loaded {len(qa)} questions. Language: {lang_name}"
+    return state, f"Loaded {len(qa)} questions. Language: {lang_name}"
 
 
 def get_current_question(state):
@@ -120,10 +121,24 @@ def submit_answer(state, choice):
         return state, "Finished.", ""
     item = state["qa"][i]
     is_correct = (choice == item["a"])
-    state["score"] += int(is_correct)
-    state["idx"] += 1
-    fb = "✅ Correct!" if is_correct else f"❌ Not quite.\n**Correct:** {item['a']}"
-    return state, fb
+
+    # Check if this is a second attempt after a wrong answer
+    if 'is_second_attempt' in st.session_state and st.session_state['is_second_attempt']:
+        # This is a second attempt, so update score and move on regardless of correctness
+        state["score"] += int(is_correct)
+        state["idx"] += 1
+        st.session_state['is_second_attempt'] = False  # Reset flag
+        return state, "✅ Correct!" if is_correct else "❌ Still incorrect, but moving on."
+
+    if is_correct:
+        # Correct on first try
+        state["score"] += 1
+        state["idx"] += 1
+        return state, "✅ Correct!"
+    else:
+        # Incorrect on first try. Don't advance the index, but set flag for second chance.
+        st.session_state['is_second_attempt'] = True
+        return state, f"❌ Not quite.\n**Correct:** {item['a']}"
 
 
 # Initialize session state
@@ -136,6 +151,31 @@ def init_session_state():
         st.session_state.show_feedback = False
     if 'feedback_message' not in st.session_state:
         st.session_state.feedback_message = ""
+    # New state variable for second chance
+    if 'is_second_attempt' not in st.session_state:
+        st.session_state['is_second_attempt'] = False
+    # New state variable to control video jump
+    if 'video_jump_time' not in st.session_state:
+        st.session_state['video_jump_time'] = None
+
+
+def handle_url_submit():
+    """Handle URL submission via Enter key or button click"""
+    url = st.session_state.get("youtube_url", "").strip()
+    if url:
+        with st.spinner("🔄 Fetching captions and generating questions..."):
+            quiz_state, message = build_qa(url)
+            st.session_state.quiz_state = quiz_state
+            st.session_state.show_feedback = False
+            st.session_state.current_answer = None
+            st.session_state.generation_message = message
+            # Reset jump time when a new video is loaded
+            st.session_state['video_jump_time'] = None
+
+
+def jump_to_timestamp(start_time):
+    """Update the video jump time in session state"""
+    st.session_state['video_jump_time'] = int(start_time)
 
 
 # -------- Streamlit UI --------
@@ -145,35 +185,29 @@ def main():
     st.title("🎥 Watch & Ask — YouTube Captions → LLM Questions")
 
     # URL Input Section
-    st.subheader("📝 Enter YouTube URL")
-    col1, col2 = st.columns([3, 1])
+    st.subheader("🔗 Enter YouTube URL")
 
-    with col1:
-        url = st.text_input(
-            "YouTube URL",
-            placeholder="https://www.youtube.com/watch?v=XXXXXXXXXXX",
-            key="youtube_url"
-        )
+    with st.form(key="url_form", clear_on_submit=False):
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            url = st.text_input(
+                "YouTube URL",
+                placeholder="https://www.youtube.com/watch?v=XXXXXXXXXXX",
+                key="youtube_url",
+                label_visibility="collapsed"
+            )
+        with col2:
+            generate_btn = st.form_submit_button("🎯 Generate Questions", type="primary", use_container_width=True)
 
-    with col2:
-        st.write("")  # Add spacing
-        st.write("")  # Add spacing
-        generate_btn = st.button("🎯 Generate Questions", type="primary")
+    if generate_btn:
+        handle_url_submit()
 
-    # Generate questions when button is clicked
-    if generate_btn and url:
-        with st.spinner("🔄 Fetching captions and generating questions..."):
-            quiz_state, message = build_qa(url)
-            st.session_state.quiz_state = quiz_state
-            st.session_state.show_feedback = False
-            st.session_state.current_answer = None
-
-        if quiz_state:
-            st.success(message)
+    if hasattr(st.session_state, 'generation_message'):
+        if st.session_state.quiz_state:
+            st.caption(f"✅ {st.session_state.generation_message}")
         else:
-            st.error(message)
+            st.error(st.session_state.generation_message)
 
-    # Display quiz if questions are loaded
     if st.session_state.quiz_state:
         display_quiz()
 
@@ -181,111 +215,104 @@ def main():
 def display_quiz():
     quiz_state = st.session_state.quiz_state
 
-    # Progress bar
-    progress = quiz_state["idx"] / len(quiz_state["qa"])
-    st.progress(progress)
-
-    # Score display
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("📊 Score", f"{quiz_state['score']}/{quiz_state['idx']}")
-    with col2:
-        st.metric("🎯 Question", f"{quiz_state['idx'] + 1}/{len(quiz_state['qa'])}")
-    with col3:
-        st.metric("🌐 Language", quiz_state['lang_name'])
-
-    st.divider()
-
-    # YouTube Video Player
-    if quiz_state.get("video_id"):
-        st.subheader("📺 Video Player")
-        youtube_url = f"https://www.youtube.com/watch?v={quiz_state['video_id']}"
-
-        # Create two columns - video player and current question info
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            # Embed YouTube video
-            video_embed_url = f"https://www.youtube.com/embed/{quiz_state['video_id']}"
-            st.components.v1.iframe(video_embed_url, width=560, height=315)
-
-        with col2:
-            # Show current question timestamp
-            if quiz_state["idx"] < len(quiz_state["qa"]):
-                current_time = quiz_state["qa"][quiz_state["idx"]]["start"]
-                st.info(f"⏰ Current question is from ~{current_time}s in the video")
-
-                # Direct link to timestamp
-                timestamped_url = f"{youtube_url}&t={int(current_time)}s"
-                st.markdown(f"[▶️ Jump to timestamp]({timestamped_url})")
-
-            st.markdown(f"[🔗 Open in YouTube]({youtube_url})")
-
-        st.divider()
-
-    # Check if quiz is finished
     if quiz_state["idx"] >= len(quiz_state["qa"]):
         st.balloons()
-        st.success(f"🎉 Quiz Complete! Final Score: {quiz_state['score']}/{len(quiz_state['qa'])}")
-
-        # Calculate percentage
-        percentage = (quiz_state['score'] / len(quiz_state['qa'])) * 100
+        st.subheader("🎉 Quiz Complete!")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📊 Final Score", f"{quiz_state['score']}/{len(quiz_state['qa'])}")
+        with col2:
+            percentage = (quiz_state['score'] / len(quiz_state['qa'])) * 100
+            st.metric("📈 Percentage", f"{percentage:.1f}%")
         if percentage >= 80:
             st.success("🏆 Excellent work!")
         elif percentage >= 60:
             st.info("👍 Good job!")
         else:
             st.warning("📚 Keep practicing!")
-
-        # Reset button
-        if st.button("🔄 Start New Quiz"):
+        if st.button("🔄 Start New Quiz", type="primary"):
             st.session_state.quiz_state = None
             st.session_state.show_feedback = False
             st.session_state.current_answer = None
+            st.session_state['video_jump_time'] = None
+            st.session_state['is_second_attempt'] = False
+            if hasattr(st.session_state, 'generation_message'):
+                delattr(st.session_state, 'generation_message')
             st.rerun()
         return
 
-    # Display current question
-    question_data = get_current_question(quiz_state)
-    if question_data:
-        question_text, choices = question_data
+    video_col, question_col = st.columns([1.2, 1], gap="medium")
 
+    with video_col:
+        st.subheader("📺 Video Player")
+        if quiz_state.get("video_id"):
+            # Use the jump time from session state if available, otherwise use the question's start time
+            jump_time = st.session_state.get('video_jump_time')
+            if jump_time is None:
+                 jump_time = quiz_state["qa"][quiz_state["idx"]]["start"]
+
+            # Construct the embedded video URL with the start time
+            video_embed_url = f"https://www.youtube.com/embed/{quiz_state['video_id']}?start={int(jump_time)}"
+
+            st.components.v1.iframe(video_embed_url, height=280)
+
+            st.caption(f"⏰ Question from ~{quiz_state['qa'][quiz_state['idx']]['start']}s")
+
+    with question_col:
         st.subheader("❓ Current Question")
-        st.write(question_text)
+        question_data = get_current_question(quiz_state)
+        if question_data:
+            question_text, choices = question_data
 
-        # Display choices as radio buttons
-        current_answer = st.radio(
-            "Choose your answer:",
-            options=choices,
-            key=f"answer_{quiz_state['idx']}",
-            index=None
-        )
+            with st.container():
+                st.write(question_text)
 
-        # Submit button
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            submit_btn = st.button("✅ Submit Answer", disabled=(current_answer is None))
+                # The "Jump to timestamp" button is now removed from here.
 
-        # Handle answer submission
-        if submit_btn and current_answer:
-            # Process the answer
-            old_state = dict(quiz_state)  # Make a copy
-            quiz_state, feedback = submit_answer(quiz_state, current_answer)
+                # This button only appears when the user has answered incorrectly.
+                if st.session_state.get('is_second_attempt'):
+                    # Get timestamp of the correct answer
+                    correct_answer_start_time = quiz_state["qa"][quiz_state["idx"]]["start"]
+                    if st.button(f"↩️ Try again? Jump back to the correct answer's section!", type="secondary", use_container_width=True):
+                        jump_to_timestamp(correct_answer_start_time)
+                        st.rerun()
 
-            # Update session state
-            st.session_state.quiz_state = quiz_state
-            st.session_state.feedback_message = feedback
-            st.session_state.show_feedback = True
+                current_answer = st.radio(
+                    "Choose your answer:",
+                    options=choices,
+                    key=f"answer_{quiz_state['idx']}",
+                    index=None
+                )
 
-            # Show feedback
-            if "Correct!" in feedback:
-                st.success(feedback)
-            else:
-                st.error(feedback)
+                submit_btn = st.button(
+                    "✅ Submit Answer",
+                    disabled=(current_answer is None),
+                    type="primary",
+                    use_container_width=True
+                )
 
-            # Add a small delay and rerun to show next question
-            time.sleep(1)
-            st.rerun()
+                if submit_btn and current_answer:
+                    quiz_state, feedback = submit_answer(quiz_state, current_answer)
+                    st.session_state.quiz_state = quiz_state
+                    st.session_state.feedback_message = feedback
+                    st.session_state.show_feedback = True
+
+                    if "Correct!" in feedback:
+                        st.success(feedback)
+                    else:
+                        st.error(feedback)
+
+                    time.sleep(1)
+                    st.rerun()
+
+    st.divider()
+    progress = quiz_state["idx"] / len(quiz_state["qa"])
+    st.progress(progress)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("📊 Score", f"{quiz_state['score']}/{quiz_state['idx']}")
+    with col2:
+        st.metric("🎯 Progress", f"{quiz_state['idx'] + 1}/{len(quiz_state['qa'])}")
 
 
 if __name__ == "__main__":
