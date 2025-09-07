@@ -31,7 +31,8 @@ def extract_video_id(url: str) -> str | None:
 def fetch_captions(video_id: str, preferred_languages=None):
     """
     Returns: (captions_list, lang_code)
-    Uses the NEW YouTube Transcript API (instance-based).
+    Uses the NEW YouTube Transcript API (instance-based) with comprehensive fallback methods.
+    This implementation is more resistant to API blocking and rate limiting.
 
     Args:
         video_id: YouTube video ID
@@ -52,7 +53,8 @@ def fetch_captions(video_id: str, preferred_languages=None):
                 # Convert FetchedTranscript object to raw data format
                 transcript_data = fetched_transcript.to_raw_data()
                 return transcript_data, lang
-            except Exception:
+            except Exception as e:
+                print(f"Failed to get {lang}: {e}")
                 continue
 
         # Method 2: Use list() to get all available transcripts and pick the best one
