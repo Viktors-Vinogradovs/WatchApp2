@@ -1,12 +1,13 @@
 ---
-title: WatchApp
+title: SkatiesVideo
 emoji: 📉
-colorFrom: pink
-colorTo: blue
+colorFrom: green
+colorTo: red
 sdk: gradio
-sdk_version: 5.43.1
+sdk_version: 5.42.0
 app_file: app.py
 pinned: false
+short_description: Generates Questions on Videos form kids.
 ---
 
 Check out the configuration reference at https://huggingface.co/docs/hub/spaces-config-reference

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch & Ask - YouTube Quiz</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Watch & Ask</h1>
+            <p class="subtitle">YouTube Captions → Quiz Questions</p>
+        </header>
+
+        <!-- URL Input Section -->
+        <section id="url-section" class="card">
+            <h2>Enter YouTube URL</h2>
+            <div class="url-input-group">
+                <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+                <button id="generate-btn" class="btn btn-primary">Generate Quiz</button>
+            </div>
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <span>Fetching captions and generating questions...</span>
+            </div>
+            <div id="error-message" class="error hidden"></div>
+        </section>
+
+        <!-- Quiz Section -->
+        <section id="quiz-section" class="hidden">
+            <div class="quiz-layout">
+                <!-- Video Player -->
+                <div class="video-container card">
+                    <h2>Video Player</h2>
+                    <div id="video-wrapper">
+                        <iframe id="youtube-player" 
+                                width="100%" 
+                                height="315" 
+                                frameborder="0" 
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                                allowfullscreen>
+                        </iframe>
+                    </div>
+                    <p id="timestamp-info" class="timestamp-info"></p>
+                </div>
+
+                <!-- Question Panel -->
+                <div class="question-container card">
+                    <h2>Question <span id="question-num">1</span> of <span id="total-questions">0</span></h2>
+                    <div id="question-text" class="question-text"></div>
+                    
+                    <div id="jump-hint" class="jump-hint hidden">
+                        <button id="jump-btn" class="btn btn-secondary">
+                            Jump back to review this section
+                        </button>
+                    </div>
+
+                    <div id="choices-container" class="choices"></div>
+                    
+                    <button id="submit-btn" class="btn btn-primary" disabled>Submit Answer</button>
+                    
+                    <div id="feedback" class="feedback hidden"></div>
+                </div>
+            </div>
+
+            <!-- Progress Bar -->
+            <div class="progress-section card">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <div class="stats">
+                    <div class="stat">
+                        <span class="stat-label">Score</span>
+                        <span id="score-display" class="stat-value">0/0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Progress</span>
+                        <span id="progress-display" class="stat-value">1/0</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-section" class="card hidden">
+            <h2>Quiz Complete!</h2>
+            <div class="results-content">
+                <div class="score-display">
+                    <div class="big-score" id="final-score">0/0</div>
+                    <div class="percentage" id="percentage">0%</div>
+                </div>
+                <p id="result-message" class="result-message"></p>
+                <button id="restart-btn" class="btn btn-primary">Start New Quiz</button>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // State
+        let selectedAnswer = null;
+        let currentTimestamp = 0;
+
+        // DOM Elements
+        const urlSection = document.getElementById('url-section');
+        const quizSection = document.getElementById('quiz-section');
+        const resultsSection = document.getElementById('results-section');
+        const urlInput = document.getElementById('youtube-url');
+        const generateBtn = document.getElementById('generate-btn');
+        const loading = document.getElementById('loading');
+        const errorMessage = document.getElementById('error-message');
+        const youtubePlayer = document.getElementById('youtube-player');
+        const questionNum = document.getElementById('question-num');
+        const totalQuestions = document.getElementById('total-questions');
+        const questionText = document.getElementById('question-text');
+        const choicesContainer = document.getElementById('choices-container');
+        const submitBtn = document.getElementById('submit-btn');
+        const feedback = document.getElementById('feedback');
+        const progressFill = document.getElementById('progress-fill');
+        const scoreDisplay = document.getElementById('score-display');
+        const progressDisplay = document.getElementById('progress-display');
+        const timestampInfo = document.getElementById('timestamp-info');
+        const jumpHint = document.getElementById('jump-hint');
+        const jumpBtn = document.getElementById('jump-btn');
+
+        // Event Listeners
+        generateBtn.addEventListener('click', generateQuiz);
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') generateQuiz();
+        });
+        submitBtn.addEventListener('click', submitAnswer);
+        document.getElementById('restart-btn').addEventListener('click', resetQuiz);
+        jumpBtn.addEventListener('click', jumpToTimestamp);
+
+        // Generate Quiz
+        async function generateQuiz() {
+            const url = urlInput.value.trim();
+            if (!url) {
+                showError('Please enter a YouTube URL.');
+                return;
+            }
+
+            showLoading(true);
+            hideError();
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to generate quiz.');
+                }
+
+                // Success - show quiz
+                totalQuestions.textContent = data.total_questions;
+                showQuizSection();
+                loadQuestion();
+
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // Load Current Question
+        async function loadQuestion() {
+            try {
+                const response = await fetch('/api/question');
+                const data = await response.json();
+
+                if (data.finished) {
+                    showResults(data.score, data.total);
+                    return;
+                }
+
+                // Update video player - start from beginning for first question
+                const videoStartTime = (data.question_num === 1) ? 0 : data.timestamp;
+                updateVideoPlayer(data.video_id, videoStartTime);
+                currentTimestamp = data.timestamp;
+
+                // Update question
+                questionNum.textContent = data.question_num;
+                questionText.textContent = data.question;
+                // Format timestamp as MM:SS
+                const mins = Math.floor(data.timestamp / 60);
+                const secs = Math.round(data.timestamp % 60);
+                const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+                timestampInfo.textContent = `Question from ~${timeStr} in the video`;
+
+                // Show jump hint if second attempt
+                if (data.is_second_attempt) {
+                    jumpHint.classList.remove('hidden');
+                } else {
+                    jumpHint.classList.add('hidden');
+                }
+
+                // Render choices
+                renderChoices(data.choices);
+
+                // Update progress
+                updateProgress(data.question_num, data.total, data.score);
+
+                // Reset state
+                selectedAnswer = null;
+                submitBtn.disabled = true;
+                feedback.classList.add('hidden');
+
+            } catch (error) {
+                showError('Failed to load question: ' + error.message);
+            }
+        }
+
+        // Render answer choices
+        function renderChoices(choices) {
+            choicesContainer.innerHTML = '';
+            choices.forEach((choice, index) => {
+                const btn = document.createElement('button');
+                btn.className = 'choice-btn';
+                btn.textContent = choice;
+                btn.addEventListener('click', () => selectChoice(btn, choice));
+                choicesContainer.appendChild(btn);
+            });
+        }
+
+        // Select a choice
+        function selectChoice(btn, choice) {
+            // Remove selection from all
+            document.querySelectorAll('.choice-btn').forEach(b => b.classList.remove('selected'));
+            // Select this one
+            btn.classList.add('selected');
+            selectedAnswer = choice;
+            submitBtn.disabled = false;
+        }
+
+        // Submit Answer
+        async function submitAnswer() {
+            if (!selectedAnswer) return;
+
+            submitBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ answer: selectedAnswer })
+                });
+
+                const data = await response.json();
+
+                // Show feedback
+                showFeedback(data.correct, data.message);
+
+                // Update score
+                if (data.score !== undefined) {
+                    const currentQ = parseInt(questionNum.textContent);
+                    scoreDisplay.textContent = `${data.score}/${currentQ}`;
+                }
+
+                // Wait then load next or stay
+                setTimeout(() => {
+                    if (data.move_next) {
+                        loadQuestion();
+                    } else {
+                        // Second chance - re-enable selection
+                        submitBtn.disabled = false;
+                        selectedAnswer = null;
+                        document.querySelectorAll('.choice-btn').forEach(b => b.classList.remove('selected'));
+                        // Show jump hint
+                        jumpHint.classList.remove('hidden');
+                        currentTimestamp = data.timestamp;
+                    }
+                }, 1500);
+
+            } catch (error) {
+                showError('Failed to submit answer: ' + error.message);
+                submitBtn.disabled = false;
+            }
+        }
+
+        // Update video player
+        function updateVideoPlayer(videoId, timestamp) {
+            // Use Math.round for better precision, ensure at least 0
+            const startTime = Math.max(0, Math.round(timestamp));
+            const embedUrl = `https://www.youtube.com/embed/${videoId}?start=${startTime}&enablejsapi=1`;
+            if (!youtubePlayer.src.includes(videoId) || !youtubePlayer.src.includes(`start=${startTime}`)) {
+                youtubePlayer.src = embedUrl;
+            }
+        }
+
+        // Jump to timestamp
+        function jumpToTimestamp() {
+            const videoId = youtubePlayer.src.match(/embed\/([^?]+)/)?.[1];
+            if (videoId) {
+                // Use Math.round for better precision
+                const startTime = Math.max(0, Math.round(currentTimestamp));
+                youtubePlayer.src = `https://www.youtube.com/embed/${videoId}?start=${startTime}&autoplay=1`;
+            }
+        }
+
+        // Show feedback
+        function showFeedback(correct, message) {
+            feedback.textContent = message;
+            feedback.className = `feedback ${correct ? 'correct' : 'incorrect'}`;
+            feedback.classList.remove('hidden');
+        }
+
+        // Update progress bar and stats
+        function updateProgress(current, total, score) {
+            const percent = ((current - 1) / total) * 100;
+            progressFill.style.width = `${percent}%`;
+            progressDisplay.textContent = `${current}/${total}`;
+            scoreDisplay.textContent = `${score}/${current - 1}`;
+        }
+
+        // Show results
+        function showResults(score, total) {
+            quizSection.classList.add('hidden');
+            resultsSection.classList.remove('hidden');
+
+            const percentage = Math.round((score / total) * 100);
+            document.getElementById('final-score').textContent = `${score}/${total}`;
+            document.getElementById('percentage').textContent = `${percentage}%`;
+
+            let message;
+            if (percentage >= 80) {
+                message = 'Excellent work!';
+            } else if (percentage >= 60) {
+                message = 'Good job!';
+            } else {
+                message = 'Keep practicing!';
+            }
+            document.getElementById('result-message').textContent = message;
+        }
+
+        // Reset quiz
+        async function resetQuiz() {
+            await fetch('/api/reset', { method: 'POST' });
+            
+            urlSection.classList.remove('hidden');
+            quizSection.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+            urlInput.value = '';
+            youtubePlayer.src = '';
+            hideError();
+        }
+
+        // UI Helpers
+        function showLoading(show) {
+            loading.classList.toggle('hidden', !show);
+            generateBtn.disabled = show;
+        }
+
+        function showError(msg) {
+            errorMessage.textContent = msg;
+            errorMessage.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+
+        function showQuizSection() {
+            urlSection.classList.add('hidden');
+            quizSection.classList.remove('hidden');
+            resultsSection.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
