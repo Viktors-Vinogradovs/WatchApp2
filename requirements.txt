@@ -1,6 +1,6 @@
-# Minimal Flask version requirements
-# Total size: ~15-20MB (vs ~130MB+ with Streamlit/LangChain)
+# Minimal Flask version requirements for deployment (Koyeb, Fly.io, Render, etc.)
 
 flask>=3.0.0
 yt-dlp>=2024.1.0
 google-generativeai>=0.5.0
+gunicorn>=21.0.0
