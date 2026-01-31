@@ -170,6 +170,9 @@ def fetch_captions(url_or_id: str, preferred_languages: list[str] | None = None)
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
+        "format": "best",  # Fallback format to avoid "format not available" errors
+        "ignore_no_formats_error": True,  # Don't fail if no formats available
+        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},  # Skip format extraction for speed
     }
     
     # Add cookies if available
