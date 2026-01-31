@@ -1,4 +1,5 @@
 # app.py - Lightweight Flask version of Watch & Ask
+import os
 import secrets
 from flask import Flask, render_template, request, jsonify, session
 
@@ -6,7 +7,9 @@ from captions import extract_video_id, fetch_captions
 from llm_simple import generate_quiz_from_transcript
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
+# Use fixed secret key from env var (required for multi-worker gunicorn)
+# Falls back to random key for local dev (will break sessions on restart)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 
 
 # -------- Helper Functions --------
