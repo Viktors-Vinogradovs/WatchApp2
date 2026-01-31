@@ -1,12 +1,18 @@
-# captions.py - Fetch YouTube captions via yt-dlp (URL in, no transcript API)
+# captions.py - Fetch YouTube captions via yt-dlp (with cookie support for bot bypass)
+import base64
 import json
+import os
 import re
+import tempfile
 import urllib.parse as up
 import urllib.request as ur
 
 import yt_dlp
 
-PREFERRED = ["lv", "en", "en-US", "es", "ru"]
+PREFERRED = ["en", "en-US", "lv", "es", "ru"]
+
+# Environment variable for YouTube cookies (Base64 encoded cookies.txt content)
+YOUTUBE_COOKIES_ENV = "YOUTUBE_COOKIES_B64"
 
 
 def extract_video_id(url: str) -> str | None:
@@ -37,11 +43,38 @@ def _normalize_url(url_or_id: str) -> str:
         return f"https://www.youtube.com/watch?v={s}"
     if "youtube.com" in s or "youtu.be" in s:
         return s
-    # Might be a pasted ID with extra chars
     vid = extract_video_id(s)
     if vid:
         return f"https://www.youtube.com/watch?v={vid}"
     return s
+
+
+def _get_cookies_file() -> str | None:
+    """
+    Get path to cookies file. Creates temp file from env var if YOUTUBE_COOKIES_B64 is set.
+    Returns None if no cookies are configured.
+    """
+    cookies_b64 = os.environ.get(YOUTUBE_COOKIES_ENV, "").strip()
+    if not cookies_b64:
+        return None
+    
+    try:
+        # Decode Base64 cookies
+        cookies_content = base64.b64decode(cookies_b64).decode("utf-8")
+        
+        # Ensure proper format (Netscape format)
+        if not cookies_content.startswith("# "):
+            cookies_content = "# Netscape HTTP Cookie File\n" + cookies_content
+        
+        # Write to temp file
+        fd, path = tempfile.mkstemp(suffix=".txt", prefix="yt_cookies_")
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(cookies_content)
+        
+        return path
+    except Exception as e:
+        print(f"[COOKIES] Failed to decode cookies: {e}")
+        return None
 
 
 def _parse_json3(content: str) -> list[dict]:
@@ -96,16 +129,13 @@ def _lang_matches(preferred: str, track_lang: str) -> bool:
     return p == t
 
 
-# yt-dlp YouTube format language_preference: 10 = original, 5 = default (video's main language)
+# yt-dlp YouTube format language_preference: 10 = original, 5 = default
 _ORIGINAL_LANG_PREF = 10
 _DEFAULT_LANG_PREF = 5
 
 
 def get_video_primary_language(info: dict) -> str | None:
-    """
-    Get the video's default/original language from yt-dlp info (from audio/formats).
-    Used as the MAIN language for subtitles and question generation.
-    """
+    """Get the video's default/original language from yt-dlp info."""
     formats = info.get("formats") or []
     for pref in (_ORIGINAL_LANG_PREF, _DEFAULT_LANG_PREF):
         for f in formats:
@@ -119,27 +149,47 @@ def get_video_primary_language(info: dict) -> str | None:
 
 def fetch_captions(url_or_id: str, preferred_languages: list[str] | None = None) -> tuple[list[dict], str]:
     """
-    Fetch captions using yt-dlp (no youtube_transcript_api). Accepts pasted URL or video ID.
+    Fetch captions using yt-dlp with cookie support for bot bypass.
+    Accepts pasted URL or video ID.
 
     Returns:
         (captions_list, lang_code) — captions_list is list of {"start": float, "text": str}.
+    
+    Environment Variables:
+        YOUTUBE_COOKIES_B64: Base64-encoded cookies.txt content (Netscape format)
     """
     url = _normalize_url(url_or_id)
     if not url:
         raise RuntimeError("No YouTube URL or video ID provided.")
 
+    # Get cookies file if configured
+    cookies_file = _get_cookies_file()
+    
     ydl_opts = {
         "skip_download": True,
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
     }
+    
+    # Add cookies if available
+    if cookies_file:
+        ydl_opts["cookiefile"] = cookies_file
+        print(f"[YT-DLP] Using cookies from environment variable")
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-        except Exception as e:
-            raise RuntimeError(f"yt-dlp failed for {url}: {e}") from e
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(url, download=False)
+            except Exception as e:
+                raise RuntimeError(f"yt-dlp failed for {url}: {e}") from e
+    finally:
+        # Clean up temp cookies file
+        if cookies_file and os.path.exists(cookies_file):
+            try:
+                os.remove(cookies_file)
+            except Exception:
+                pass
 
     if not info:
         raise RuntimeError("No video info returned.")
@@ -189,7 +239,6 @@ def fetch_captions(url_or_id: str, preferred_languages: list[str] | None = None)
         if ext == "json3":
             captions = _parse_json3(content)
         else:
-            # vtt/srt: simple line-based parse (timestamp line then text)
             captions = _parse_vtt_like(content)
         if captions:
             return captions, lang_key
@@ -215,13 +264,12 @@ def fetch_captions(url_or_id: str, preferred_languages: list[str] | None = None)
 
 
 def _parse_vtt_like(content: str) -> list[dict]:
-    """Simple VTT/SRT parser: lines like 00:00:00.000 --> ... then text; output {start, text}."""
+    """Simple VTT/SRT parser."""
     out = []
     lines = content.replace("\r\n", "\n").split("\n")
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        # Timestamp line (VTT: 00:00:00.000 --> or SRT: 1 then next line timestamp)
         if "-->" in line:
             part = line.split("-->")[0].strip()
             start = _vtt_timestamp_to_seconds(part)
@@ -238,7 +286,7 @@ def _parse_vtt_like(content: str) -> list[dict]:
 
 
 def _vtt_timestamp_to_seconds(s: str) -> float:
-    """Parse VTT/SRT timestamp (HH:MM:SS.mmm or MM:SS.mmm) to seconds."""
+    """Parse VTT/SRT timestamp to seconds."""
     s = s.strip().replace(",", ".")
     parts = s.split(":")
     if len(parts) == 3:
