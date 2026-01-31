@@ -1,21 +1,15 @@
 # llm_simple.py - Single-call LLM question generation with timestamps
 import json
-import google.generativeai as genai
+import os
 from typing import List, Dict
-from config import GEMINI_API_KEY, GEMINI_QUESTION_MODEL
+from google import genai
 
-# Configure the API
-genai.configure(api_key=GEMINI_API_KEY)
+# Get config from environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_QUESTION_MODEL = os.environ.get("GEMINI_QUESTION_MODEL", "gemini-2.5-flash-lite")
 
-# Create model instance
-model = genai.GenerativeModel(
-    model_name=GEMINI_QUESTION_MODEL,
-    generation_config={
-        "temperature": 0.7,
-        "top_p": 0.7,
-        "max_output_tokens": 4096,  # Increased for full transcript
-    }
-)
+# Create client instance
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 def format_transcript_with_timestamps(captions: List[Dict]) -> str:
@@ -57,7 +51,15 @@ def generate_quiz_from_transcript(captions: List[Dict], language: str = "English
     print(f"[QGEN] Single call: lang={language}, transcript_lines={len(captions)}, max_q={max_questions}")
     
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=GEMINI_QUESTION_MODEL,
+            contents=prompt,
+            config={
+                "temperature": 0.7,
+                "top_p": 0.7,
+                "max_output_tokens": 4096,
+            }
+        )
         raw_text = response.text
         print("[QGEN] Raw response length:", len(raw_text))
         
