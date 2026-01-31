@@ -1,6 +1,6 @@
-# Minimal Flask version requirements for deployment (Koyeb, Fly.io, Render, etc.)
+# Requirements for Koyeb deployment (using youtube_transcript_api)
 
 flask>=3.0.0
-yt-dlp>=2024.1.0
+youtube-transcript-api>=0.6.0
 google-genai>=1.0.0
 gunicorn>=21.0.0
