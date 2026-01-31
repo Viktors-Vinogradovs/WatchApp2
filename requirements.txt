@@ -2,5 +2,5 @@
 # Total size: ~15-20MB (vs ~130MB+ with Streamlit/LangChain)
 
 flask>=3.0.0
-youtube-transcript-api>=0.6.0
+yt-dlp>=2024.1.0
 google-generativeai>=0.5.0

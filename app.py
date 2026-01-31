@@ -12,15 +12,16 @@ app.secret_key = secrets.token_hex(32)
 # -------- Helper Functions --------
 
 def lang_code_to_name(code: str) -> str:
-    """Convert language code to full name."""
-    c = (code or "").lower()
-    if c.startswith("lv"):
-        return "Latvian"
-    if c.startswith("es"):
-        return "Spanish"
-    if c.startswith("ru"):
-        return "Russian"
-    return "English"
+    """Convert language code to full name (for question generation). Video primary language from captions."""
+    c = (code or "").split("-")[0].lower()
+    names = {
+        "lv": "Latvian", "es": "Spanish", "ru": "Russian", "en": "English",
+        "de": "German", "fr": "French", "it": "Italian", "pt": "Portuguese",
+        "pl": "Polish", "uk": "Ukrainian", "nl": "Dutch", "ja": "Japanese",
+        "zh": "Chinese", "ko": "Korean", "hi": "Hindi", "ar": "Arabic",
+        "tr": "Turkish", "sv": "Swedish", "el": "Greek",
+    }
+    return names.get(c, "English")
 
 
 def build_quiz(url: str):
@@ -34,7 +35,7 @@ def build_quiz(url: str):
         return None, "Invalid YouTube URL."
 
     try:
-        caps, code = fetch_captions(vid)
+        caps, code = fetch_captions(url)
     except Exception as e:
         return None, f"Could not fetch captions: {e}"
 
@@ -108,7 +109,6 @@ def api_generate():
         "language": quiz_data["lang_name"]
     })
 
-
 @app.route("/api/question", methods=["GET"])
 def api_question():
     """Get current question."""
@@ -143,7 +143,6 @@ def api_question():
         "score": session.get("score", 0),
         "is_second_attempt": session.get("is_second_attempt", False)
     })
-
 
 @app.route("/api/submit", methods=["POST"])
 def api_submit():
